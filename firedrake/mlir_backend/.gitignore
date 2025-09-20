@@ -1,0 +1,27 @@
+# Build artifacts
+build/
+*.so
+*.dylib
+*.o
+*.pyc
+__pycache__/
+
+# Temporary work documentation
+*_REPORT.md
+*_STATUS.md
+*_PLAN.md
+ANALYSIS_*.md
+BUGS_*.md
+CLEANUP_*.md
+CRITICAL_*.md
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Test executables (but not test sources)
+test/test_*
+!test/test_*.cpp
+!test/test_*.py
