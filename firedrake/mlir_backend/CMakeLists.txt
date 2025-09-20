@@ -124,6 +124,7 @@ add_library(firedrake_mlir SHARED
     src/FEMDialectSimple.cpp       # FEM dialect implementation (working version)
     src/GEMDialectSimple.cpp       # GEM dialect implementation (working version)
     src/FEMPatterns.cpp            # FEM patterns and transformations
+    src/OptimizationPatterns.cpp   # Additional optimization patterns
     src/MLIRCompiler.cpp           # MLIR compilation infrastructure
     src/SparseMatrix.cpp           # Sparse matrix operations
     src/SparseTensorSupport.cpp    # Sparse tensor support
