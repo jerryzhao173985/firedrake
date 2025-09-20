@@ -30,10 +30,19 @@ private:
     MLIRContext* context;
     OpBuilder builder;
     ModuleOp module;
+    std::unique_ptr<ExecutionEngine> engine;  // MLIR best practice: manage ExecutionEngine
 
 public:
     FEMAssemblyKernel(MLIRContext* ctx) : context(ctx), builder(ctx) {
         module = ModuleOp::create(builder.getUnknownLoc());
+    }
+
+    ~FEMAssemblyKernel() {
+        // IMPORTANT: According to MLIR best practices:
+        // - ExecutionEngine owns the module after create()
+        // - Do NOT call module.erase() if ExecutionEngine exists
+        // - ExecutionEngine destructor handles cleanup
+        // The unique_ptr will automatically clean up the engine
     }
 
     // Generate the ONLY kernel that matters: Element Assembly
@@ -128,34 +137,48 @@ public:
         pm.run(module);
     }
 
-    // Get JIT-compiled function pointer
-    void* getCompiledKernel() {
-        // Convert to LLVM
-        PassManager pm(context);
-        pm.addPass(createSCFToControlFlowPass());
-        pm.addPass(createFinalizeMemRefToLLVMConversionPass());
-        pm.addPass(createConvertFuncToLLVMPass());
-        pm.addPass(createReconcileUnrealizedCastsPass());
-
-        if (failed(pm.run(module))) {
-            return nullptr;
-        }
-
-        // Create execution engine
-        ExecutionEngineOptions opts;
-        opts.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Aggressive;
-
-        auto engine = ExecutionEngine::create(module, opts);
+    // Get JIT-compiled function pointer - MLIR best practice version
+    void* getCompiledKernel(const std::string& functionName = "fem_assembly_kernel") {
+        // Only create engine once
         if (!engine) {
+            // Convert to LLVM
+            PassManager pm(context);
+            pm.addPass(createSCFToControlFlowPass());
+            pm.addPass(createFinalizeMemRefToLLVMConversionPass());
+            pm.addPass(createConvertFuncToLLVMPass());
+            pm.addPass(createReconcileUnrealizedCastsPass());
+
+            if (failed(pm.run(module))) {
+                return nullptr;
+            }
+
+            // Create execution engine (takes ownership of module)
+            ExecutionEngineOptions opts;
+            opts.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Aggressive;
+
+            auto maybeEngine = ExecutionEngine::create(module, opts);
+            if (!maybeEngine) {
+                return nullptr;
+            }
+
+            // MLIR best practice: Store engine as member
+            engine = std::move(*maybeEngine);
+        }
+
+        // Look up the function - this is the MLIR standard way
+        auto result = engine->lookupPacked(functionName);
+        if (!result) {
             return nullptr;
         }
 
-        // Extract and return execution engine
-        if (!engine) {
-            return nullptr;
-        }
-        auto* enginePtr = (*engine).release();
-        return enginePtr;
+        // Return function pointer - caller does NOT own this
+        // The ExecutionEngine owns the JIT'd code
+        return result;
+    }
+
+    // MLIR best practice: Provide accessor for ExecutionEngine if needed
+    ExecutionEngine* getEngine() {
+        return engine.get();
     }
 
     // CSR support - just the basics
