@@ -15,13 +15,67 @@
  */
 
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include <unordered_map>
 
 namespace mlir {
 namespace firedrake {
+
+//===----------------------------------------------------------------------===//
+// Function Space Cache - Performance optimization from Python analysis
+//===----------------------------------------------------------------------===//
+class FunctionSpaceCache {
+private:
+    struct SpaceKey {
+        std::string family;
+        unsigned degree;
+        int dimension;
+
+        bool operator==(const SpaceKey& other) const {
+            return family == other.family &&
+                   degree == other.degree &&
+                   dimension == other.dimension;
+        }
+    };
+
+    struct SpaceKeyHash {
+        size_t operator()(const SpaceKey& k) const {
+            return std::hash<std::string>()(k.family) ^
+                   (std::hash<unsigned>()(k.degree) << 1) ^
+                   (std::hash<int>()(k.dimension) << 2);
+        }
+    };
+
+    std::unordered_map<SpaceKey, Value, SpaceKeyHash> cache;
+
+public:
+    Value getOrCreate(OpBuilder& builder, Location loc,
+                     StringRef family, unsigned degree, int dimension) {
+        SpaceKey key{family.str(), degree, dimension};
+
+        auto it = cache.find(key);
+        if (it != cache.end()) {
+            return it->second;  // Return cached space
+        }
+
+        // Create new space (would call actual dialect op here)
+        auto spaceType = builder.getIndexType();  // Placeholder type
+        auto space = builder.create<arith::ConstantIndexOp>(loc, dimension);
+
+        cache[key] = space;
+        return space;
+    }
+
+    void clear() { cache.clear(); }
+};
+
+// Global cache instance
+static FunctionSpaceCache functionSpaceCache;
 
 //===----------------------------------------------------------------------===//
 // Helper functions
@@ -251,6 +305,68 @@ struct ConstantFoldMul : public OpRewritePattern<arith::MulFOp> {
 };
 
 //===----------------------------------------------------------------------===//
+// Pattern: Convert SCF to Affine loops for better optimization
+// From gem_to_affine.py analysis - affine.for enables more optimizations
+//===----------------------------------------------------------------------===//
+struct ConvertSCFToAffine : public OpRewritePattern<scf::ForOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    LogicalResult matchAndRewrite(scf::ForOp op,
+                                  PatternRewriter &rewriter) const override {
+        // Check if loop bounds are constant or simple affine expressions
+        auto lowerBound = op.getLowerBound();
+        auto upperBound = op.getUpperBound();
+        auto step = op.getStep();
+
+        // Only convert if bounds are constants or index casts of constants
+        auto getLiteralValue = [](Value v) -> std::optional<int64_t> {
+            if (auto constOp = v.getDefiningOp<arith::ConstantIndexOp>()) {
+                return constOp.value();
+            }
+            if (auto constOp = v.getDefiningOp<arith::ConstantOp>()) {
+                if (auto intAttr = llvm::dyn_cast<IntegerAttr>(constOp.getValue())) {
+                    return intAttr.getValue().getSExtValue();
+                }
+            }
+            return std::nullopt;
+        };
+
+        auto lowerVal = getLiteralValue(lowerBound);
+        auto upperVal = getLiteralValue(upperBound);
+        auto stepVal = getLiteralValue(step);
+
+        if (!lowerVal || !upperVal || !stepVal)
+            return failure();
+
+        // Create affine.for loop
+        auto affineLoop = rewriter.create<affine::AffineForOp>(
+            op.getLoc(), *lowerVal, *upperVal, *stepVal);
+
+        // Map the SCF induction variable to the affine induction variable
+        rewriter.setInsertionPointToStart(affineLoop.getBody());
+
+        // Clone the body operations
+        IRMapping mapping;
+        mapping.map(op.getInductionVar(), affineLoop.getInductionVar());
+
+        // Clone operations from SCF body to affine body
+        for (auto &bodyOp : llvm::make_early_inc_range(op.getBody()->getOperations())) {
+            if (!llvm::isa<scf::YieldOp>(bodyOp))
+                rewriter.clone(bodyOp, mapping);
+        }
+
+        // Handle loop-carried values if any
+        if (!op.getInitArgs().empty()) {
+            // This is more complex - would need affine.yield
+            return failure();  // Skip loops with iter_args for now
+        }
+
+        rewriter.eraseOp(op);
+        return success();
+    }
+};
+
+//===----------------------------------------------------------------------===//
 // Pattern: Strength reduction - multiply by power of 2 to shift
 //===----------------------------------------------------------------------===//
 struct StrengthReduceMul : public OpRewritePattern<arith::MulIOp> {
@@ -334,7 +450,8 @@ void populateOptimizationPatterns(RewritePatternSet &patterns) {
                  ConstantFoldAdd,
                  ConstantFoldMul,
                  StrengthReduceMul,
-                 FoldKroneckerDelta>(patterns.getContext());
+                 FoldKroneckerDelta,
+                 ConvertSCFToAffine>(patterns.getContext());
 }
 
 //===----------------------------------------------------------------------===//
@@ -361,11 +478,11 @@ LogicalResult verifyPolynomialDegree(unsigned degree) {
 
 LogicalResult verifyTensorIndexing(Value tensor, ArrayRef<Value> indices) {
     // Verify tensor indexing from GEMDialectProper
-    auto tensorType = tensor.getType().dyn_cast<RankedTensorType>();
+    auto tensorType = llvm::dyn_cast<RankedTensorType>(tensor.getType());
     if (!tensorType) return failure();
 
     // Check that number of indices matches tensor rank
-    if (indices.size() != tensorType.getRank()) {
+    if (static_cast<int64_t>(indices.size()) != tensorType.getRank()) {
         return failure();
     }
 

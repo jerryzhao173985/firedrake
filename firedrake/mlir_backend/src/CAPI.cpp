@@ -742,3 +742,117 @@ extern "C" FD_API int fd_is_dialect_registered(const char* dialect_name) {
     std::lock_guard<std::mutex> lock(g_dialect_mutex);
     return g_registered_dialects.count(dialect_name) ? 1 : 0;
 }
+
+//===----------------------------------------------------------------------===//
+// Builder Pattern Implementation - From Python dialect analysis
+//===----------------------------------------------------------------------===//
+
+class OpBuilderImpl {
+private:
+    mlir::OpBuilder builder;
+    mlir::ModuleOp module;
+    std::vector<mlir::Value> operations;
+    mlir::Value currentValue;
+
+public:
+    OpBuilderImpl(mlir::ModuleOp mod) : builder(mod.getContext()), module(mod) {
+        builder.setInsertionPointToEnd(module.getBody());
+    }
+
+    OpBuilderImpl* functionSpace(const char* family, int degree, int dimension) {
+        auto loc = builder.getUnknownLoc();
+        // Create placeholder - would use actual FEM dialect op
+        auto indexType = builder.getIndexType();
+        currentValue = builder.create<mlir::arith::ConstantIndexOp>(loc, dimension);
+        operations.push_back(currentValue);
+        return this;  // Fluent interface
+    }
+
+    OpBuilderImpl* gradient(mlir::Value function) {
+        currentValue = function;  // Would apply gradient op here
+        operations.push_back(currentValue);
+        return this;
+    }
+
+    OpBuilderImpl* inner(mlir::Value left, mlir::Value right) {
+        auto loc = builder.getUnknownLoc();
+        // Placeholder for inner product
+        currentValue = builder.create<mlir::arith::MulFOp>(loc, left, right);
+        operations.push_back(currentValue);
+        return this;
+    }
+
+    mlir::Value build() {
+        return currentValue;
+    }
+};
+
+// Builder Pattern C API Implementation
+extern "C" FD_API FdOpBuilder fd_op_builder_create(FdModule module) {
+    if (!module) return nullptr;
+    auto* mod = reinterpret_cast<mlir::ModuleOp*>(module);
+    auto* builder = new OpBuilderImpl(*mod);
+    return reinterpret_cast<FdOpBuilder>(builder);
+}
+
+extern "C" FD_API FdOpBuilder fd_op_builder_function_space(FdOpBuilder builder,
+                                                          const char* family,
+                                                          int degree,
+                                                          int dimension) {
+    if (!builder) return nullptr;
+    auto* impl = reinterpret_cast<OpBuilderImpl*>(builder);
+    impl->functionSpace(family, degree, dimension);
+    return builder;
+}
+
+extern "C" FD_API FdOpBuilder fd_op_builder_trial_function(FdOpBuilder builder,
+                                                          FdValue function_space) {
+    // Placeholder implementation
+    return builder;
+}
+
+extern "C" FD_API FdOpBuilder fd_op_builder_test_function(FdOpBuilder builder,
+                                                         FdValue function_space) {
+    // Placeholder implementation
+    return builder;
+}
+
+extern "C" FD_API FdOpBuilder fd_op_builder_gradient(FdOpBuilder builder, FdValue function) {
+    if (!builder || !function) return nullptr;
+    auto* impl = reinterpret_cast<OpBuilderImpl*>(builder);
+    auto* val = reinterpret_cast<mlir::Value*>(function);
+    impl->gradient(*val);
+    return builder;
+}
+
+extern "C" FD_API FdOpBuilder fd_op_builder_inner(FdOpBuilder builder,
+                                                 FdValue left, FdValue right) {
+    if (!builder || !left || !right) return nullptr;
+    auto* impl = reinterpret_cast<OpBuilderImpl*>(builder);
+    auto* leftVal = reinterpret_cast<mlir::Value*>(left);
+    auto* rightVal = reinterpret_cast<mlir::Value*>(right);
+    impl->inner(*leftVal, *rightVal);
+    return builder;
+}
+
+extern "C" FD_API FdOpBuilder fd_op_builder_integral(FdOpBuilder builder,
+                                                    FdValue integrand,
+                                                    const char* domain,
+                                                    int subdomain_id) {
+    // Placeholder implementation
+    return builder;
+}
+
+extern "C" FD_API FdValue fd_op_builder_build(FdOpBuilder builder) {
+    if (!builder) return nullptr;
+    auto* impl = reinterpret_cast<OpBuilderImpl*>(builder);
+    mlir::Value result = impl->build();
+    return reinterpret_cast<FdValue>(new mlir::Value(result));
+}
+
+extern "C" FD_API void fd_op_builder_destroy(FdOpBuilder builder) {
+    if (builder) {
+        auto* impl = reinterpret_cast<OpBuilderImpl*>(builder);
+        delete impl;
+    }
+}

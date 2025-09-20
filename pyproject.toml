@@ -42,6 +42,12 @@ dependencies = [
   "sympy",
   "islpy>=2025.1.5; sys_platform == 'darwin'",
 ]
+
+[project.optional-dependencies]
+mlir = [
+  # MLIR Python bindings - user should have LLVM/MLIR installed at ~/llvm-install/
+  "pybind11>=2.10.0",
+]
 classifiers = [
   "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Science/Research",

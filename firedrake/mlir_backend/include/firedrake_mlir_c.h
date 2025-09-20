@@ -202,6 +202,45 @@ FD_API FdKernel fd_assembly_compile_kernel(FdAssembly assembly, int degree);
 FD_API void fd_free(void* p);
 
 //===----------------------------------------------------------------------===//
+// Builder Pattern API - Fluent interface from Python analysis
+//===----------------------------------------------------------------------===//
+
+// Opaque handle for the fluent builder
+typedef void* FdOpBuilder;
+
+// Create a new operation builder
+FD_API FdOpBuilder fd_op_builder_create(FdModule module);
+
+// Builder methods for chaining (returns same builder for fluent interface)
+FD_API FdOpBuilder fd_op_builder_function_space(FdOpBuilder builder,
+                                                const char* family,
+                                                int degree,
+                                                int dimension);
+
+FD_API FdOpBuilder fd_op_builder_trial_function(FdOpBuilder builder,
+                                               FdValue function_space);
+
+FD_API FdOpBuilder fd_op_builder_test_function(FdOpBuilder builder,
+                                              FdValue function_space);
+
+FD_API FdOpBuilder fd_op_builder_gradient(FdOpBuilder builder, FdValue function);
+
+FD_API FdOpBuilder fd_op_builder_inner(FdOpBuilder builder,
+                                      FdValue left,
+                                      FdValue right);
+
+FD_API FdOpBuilder fd_op_builder_integral(FdOpBuilder builder,
+                                         FdValue integrand,
+                                         const char* domain,
+                                         int subdomain_id);
+
+// Build and return the constructed operation
+FD_API FdValue fd_op_builder_build(FdOpBuilder builder);
+
+// Destroy the builder
+FD_API void fd_op_builder_destroy(FdOpBuilder builder);
+
+//===----------------------------------------------------------------------===//
 // Dialect registration (for advanced users)
 //===----------------------------------------------------------------------===//
 

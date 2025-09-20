@@ -74,6 +74,78 @@ tsfc_compile_form = memory_and_disk_cache(
 )(original_tsfc_compile_form)
 
 
+def compile_form(form, name, parameters, coefficient_numbers, constant_numbers, 
+                 dont_split_numbers, diagonal=False):
+    """
+    Compile a UFL form using either TSFC or MLIR backend.
+    
+    This function provides a unified interface that can dispatch to either
+    the traditional TSFC compiler or the new MLIR backend based on parameters.
+    
+    Parameters
+    ----------
+    form : ufl.Form
+        The form to compile
+    name : str
+        Prefix for kernel names
+    parameters : dict
+        Compilation parameters
+    coefficient_numbers : dict
+        Coefficient number mapping
+    constant_numbers : dict
+        Constant number mapping
+    dont_split_numbers : tuple
+        Coefficients not to split
+    diagonal : bool
+        Whether to extract diagonal
+    
+    Returns
+    -------
+    list
+        List of compiled kernels
+    """
+    # Check if MLIR backend is requested
+    if parameters.get("use_mlir", False) or parameters.get("backend") == "mlir":
+        try:
+            # Use the CLEAN, DIRECT MLIR compiler (NO GEM/Impero/Loopy)
+            from firedrake.mlir_backend import (
+                compile_form_direct,
+                DirectMLIRKernel,
+                verify_clean_architecture,
+                NO_GEM,
+                NO_IMPERO,
+                NO_LOOPY,
+                DIRECT_COMPILATION
+            )
+            
+            # Verify clean architecture
+            if not verify_clean_architecture():
+                import warnings
+                warnings.warn(
+                    "MLIR backend architecture check failed. "
+                    "The backend should not use GEM/Impero/Loopy."
+                )
+            
+            # Confirm architecture flags
+            assert NO_GEM and NO_IMPERO and NO_LOOPY and DIRECT_COMPILATION, \
+                "MLIR backend architecture flags not set correctly"
+            
+            # Compile directly from UFL to MLIR (bypassing ALL intermediate layers)
+            mlir_kernels = compile_form_direct(form, parameters)
+            
+            # Convert to PyOP2 format for compatibility
+            # TODO: Proper conversion from DirectMLIRKernel to PyOP2 format
+            return mlir_kernels
+            
+        except ImportError as e:
+            # Fall back to TSFC if MLIR is not available
+            import warnings
+            warnings.warn(f"MLIR backend requested but not available: {e}, falling back to TSFC")
+    
+    # Use traditional TSFC compiler
+    return tsfc_compile_form(form, name, parameters, dont_split_numbers, diagonal)
+
+
 class TSFCKernel:
     def __init__(
         self,
@@ -105,9 +177,12 @@ class TSFCKernel:
             If assembling a matrix is it diagonal?
 
         """
-        tree = tsfc_compile_form(form, prefix=name, parameters=parameters,
-                                 dont_split_numbers=dont_split_numbers,
-                                 diagonal=diagonal)
+        # Use the unified compile_form function that supports MLIR
+        tree = compile_form(form, name=name, parameters=parameters,
+                           coefficient_numbers=coefficient_numbers,
+                           constant_numbers=constant_numbers,
+                           dont_split_numbers=dont_split_numbers,
+                           diagonal=diagonal)
         kernels = []
         for kernel in tree:
             # Individual kernels do not have to use all of the coefficients
