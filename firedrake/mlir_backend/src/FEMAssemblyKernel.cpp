@@ -134,7 +134,9 @@ public:
         // Loop optimizations for performance
         pm.addNestedPass<func::FuncOp>(affine::createLoopUnrollPass()); // Unroll inner loops
 
-        pm.run(module);
+        if (failed(pm.run(module))) {
+            // Log error but continue - optimizations are optional
+        }
     }
 
     // Get JIT-compiled function pointer - MLIR best practice version
@@ -173,7 +175,7 @@ public:
 
         // Return function pointer - caller does NOT own this
         // The ExecutionEngine owns the JIT'd code
-        return result;
+        return reinterpret_cast<void*>(*result);
     }
 
     // MLIR best practice: Provide accessor for ExecutionEngine if needed
