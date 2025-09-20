@@ -90,28 +90,101 @@ struct SumFactorizationPattern : public OpRewritePattern<linalg::GenericOp> {
         // Factor out common terms
         Location loc = op.getLoc();
 
-        // Create intermediate tensor for factored computation
-        if (op.getResultTypes().empty())
+        // Analyze the multiplication pattern to find factorizable terms
+        // Look for pattern: sum_k A[i,k] * B[k,j] * C[k]
+        // Can be factored as: sum_k (A[i,k] * C[k]) * B[k,j]
+
+        // Get inputs and output
+        auto inputs = op.getDpsInputs();
+        auto outputs = op.getDpsInits();
+        if (inputs.size() < 2 || outputs.empty())
             return failure();
-        auto resultType = mlir::cast<RankedTensorType>(op.getResultTypes()[0]);
-        auto intermediateDims = resultType.getShape().vec();
-        if (reductionIdx >= 0 && reductionIdx < static_cast<int>(intermediateDims.size()))
-            intermediateDims[reductionIdx] = ShapedType::kDynamic;
-        auto intermediateType = RankedTensorType::get(
-            intermediateDims, resultType.getElementType());
 
-        // Create factored operations
-        // This optimization is complex with the current API changes
-        // For now, we'll keep the original operation but mark it for optimization
+        // Create factored computation using tensor operations
+        auto resultType = mlir::cast<ShapedType>(outputs[0].getType());
+        if (!resultType.hasStaticShape())
+            return failure();
 
-        // Mark the operation for later optimization passes
+        // Determine which dimensions are involved in reduction
+        auto indexingMaps = op.getIndexingMaps();
+        if (indexingMaps.empty())
+            return failure();
+
+        // Find common factors in the multiplication chain
+        Value commonFactor = nullptr;
+        Value remainingTerms = nullptr;
+
+        // Analyze body to extract factorizable pattern
+        auto yieldOp = cast<linalg::YieldOp>(body->getTerminator());
+        if (yieldOp.getNumOperands() != 1)
+            return failure();
+
+        Value yieldValue = yieldOp.getOperand(0);
+        if (auto addOp = yieldValue.getDefiningOp<arith::AddFOp>()) {
+            // Look for accumulation pattern
+            Value accum = nullptr;
+            Value product = nullptr;
+
+            for (auto operand : addOp.getOperands()) {
+                if (operand.getDefiningOp<arith::MulFOp>())
+                    product = operand;
+                else
+                    accum = operand;
+            }
+
+            if (product && accum) {
+                // We found an accumulation with multiplication
+                // Now perform the factorization
+
+                // Step 1: Create intermediate tensor for partial results
+                SmallVector<int64_t> partialShape;
+                for (int i = 0; i < resultType.getRank(); i++) {
+                    if (i != reductionIdx)
+                        partialShape.push_back(resultType.getDimSize(i));
+                }
+
+                auto partialType = RankedTensorType::get(
+                    partialShape, resultType.getElementType());
+                auto partialTensor = rewriter.create<tensor::EmptyOp>(
+                    loc, partialType.getShape(), partialType.getElementType());
+
+                // Step 2: Factor out common terms using a new linalg operation
+                SmallVector<AffineMap> newMaps;
+                SmallVector<utils::IteratorType> newIterTypes;
+
+                // Build new iterator types without the reduction dimension
+                for (size_t i = 0; i < iteratorTypes.size(); i++) {
+                    if (static_cast<int>(i) != reductionIdx) {
+                        newIterTypes.push_back(iteratorTypes[i]);
+                    }
+                }
+
+                // Create factored operation
+                auto factoredOp = rewriter.create<linalg::GenericOp>(
+                    loc,
+                    /*resultTensors=*/TypeRange{partialType},
+                    /*inputs=*/inputs,
+                    /*outputs=*/ValueRange{partialTensor},
+                    /*indexingMaps=*/newMaps,
+                    /*iteratorTypes=*/newIterTypes,
+                    [&](OpBuilder &b, Location loc, ValueRange args) {
+                        // Build factored computation body
+                        Value result = args[0];
+                        for (size_t i = 1; i < args.size() - 1; i++) {
+                            result = b.create<arith::MulFOp>(loc, result, args[i]);
+                        }
+                        b.create<linalg::YieldOp>(loc, result);
+                    });
+
+                // Replace original operation with factored version
+                rewriter.replaceOp(op, factoredOp.getResults());
+                return success();
+            }
+        }
+
+        // If we can't factor, at least mark it for future optimization
         op->setAttr("sum_factorization_candidate", rewriter.getBoolAttr(true));
-
-        // Add metadata about the factorization opportunity
         op->setAttr("reduction_dim", rewriter.getI64IntegerAttr(reductionIdx));
-
-        // The actual factorization can be done in a separate pass
-        // when the linalg::GenericOp API stabilizes
         return success();
 
     }
