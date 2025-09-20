@@ -114,9 +114,10 @@ void FunctionSpaceCache::clear() {
 FunctionSpaceCache functionSpaceCache;
 
 //===----------------------------------------------------------------------===//
-// Helper functions
+// Helper functions - Currently unused but kept for future pattern implementations
 //===----------------------------------------------------------------------===//
 
+[[maybe_unused]]
 static bool isZeroAttr(Attribute attr) {
     if (auto floatAttr = llvm::dyn_cast_or_null<FloatAttr>(attr))
         return floatAttr.getValueAsDouble() == 0.0;
@@ -125,6 +126,7 @@ static bool isZeroAttr(Attribute attr) {
     return false;
 }
 
+[[maybe_unused]]
 static bool isOneAttr(Attribute attr) {
     if (auto floatAttr = llvm::dyn_cast_or_null<FloatAttr>(attr))
         return floatAttr.getValueAsDouble() == 1.0;
