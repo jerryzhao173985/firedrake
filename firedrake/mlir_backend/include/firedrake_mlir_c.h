@@ -76,11 +76,11 @@ FD_API int fd_compiler_lower_to_llvm(FdCompiler compiler);
 FD_API int fd_compiler_create_jit(FdCompiler compiler, FdKernel* out_kernel);
 
 // Get MLIR text representation (for debugging)
-// Caller must free returned string with fd_free_string
+// IMPORTANT: Caller must free returned string with fd_free()
 FD_API char* fd_compiler_get_mlir_text(FdCompiler compiler);
 
 // Get LLVM IR text representation (for debugging)
-// Caller must free returned string with fd_free_string
+// IMPORTANT: Caller must free returned string with fd_free()
 FD_API char* fd_compiler_get_llvm_text(FdCompiler compiler);
 
 //===----------------------------------------------------------------------===//

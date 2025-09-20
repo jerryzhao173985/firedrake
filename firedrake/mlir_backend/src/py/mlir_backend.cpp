@@ -33,7 +33,7 @@ private:
     bool verbose;
 
 public:
-    MLIRBackend(bool verbose = false) : verbose(verbose), compiler(nullptr), kernel(nullptr) {
+    MLIRBackend(bool verbose = false) : compiler(nullptr), kernel(nullptr), verbose(verbose) {
         // Initialize MLIR once
         fd_init_once();
 

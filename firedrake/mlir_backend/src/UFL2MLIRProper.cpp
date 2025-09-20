@@ -89,6 +89,11 @@ public:
         // Create builder for MLIR generation
         builder = fd_compiler_create_builder(compiler);
         module = fd_compiler_get_module(compiler);
+
+        // Safety check
+        if (!builder || !module) {
+            throw std::runtime_error("Failed to initialize MLIR builder or module");
+        }
     }
 
     ~CompleteUFL2MLIRTranslator() {
@@ -251,6 +256,7 @@ private:
         // Quadrature loop for numerical integration
         void* quadLoopBody = nullptr;
         void* quadIdx = fd_builder_create_scf_for(builder, zero, quadPoints, one, &quadLoopBody);
+        (void)quadIdx; // Induction var available if needed
 
         // Set insertion point to quadrature loop body
         fd_builder_set_insertion_point(builder, quadLoopBody);
@@ -289,8 +295,8 @@ private:
         // Yield from quadrature loop
         fd_builder_create_scf_yield(builder);
 
-        // Back to element loop body
-        fd_builder_set_insertion_point(builder, elemLoopBody);
+        // After quadrature loop, we're automatically back in element loop body
+        // No need to explicitly set insertion point
 
         // Assemble local element matrix into global CSR matrix
         // This is the COMPLETE CSR assembly with proper indexing
