@@ -28,6 +28,7 @@ namespace firedrake {
 
 //===----------------------------------------------------------------------===//
 // Function Space Cache - Performance optimization from Python analysis
+// FIXED: Don't cache Values directly as they can be invalidated
 //===----------------------------------------------------------------------===//
 class FunctionSpaceCache {
 private:
@@ -51,31 +52,66 @@ private:
         }
     };
 
-    std::unordered_map<SpaceKey, Value, SpaceKeyHash> cache;
+    struct CachedSpace {
+        int64_t uniqueId;  // Unique ID for the space
+        // Store attributes, not Values which can be invalidated
+        int dimension;
+        std::string family;
+        unsigned degree;
+    };
+
+    std::unordered_map<SpaceKey, CachedSpace, SpaceKeyHash> cache;
+    int64_t nextId = 0;
 
 public:
-    Value getOrCreate(OpBuilder& builder, Location loc,
-                     StringRef family, unsigned degree, int dimension) {
-        SpaceKey key{family.str(), degree, dimension};
+    // Returns unique ID for the function space, creating if needed
+    int64_t getOrCreateId(StringRef family, unsigned degree, int dimension);
 
-        auto it = cache.find(key);
-        if (it != cache.end()) {
-            return it->second;  // Return cached space
-        }
+    // Create Value from cached ID
+    Value createFromId(OpBuilder& builder, Location loc, int64_t id);
 
-        // Create new space (would call actual dialect op here)
-        auto spaceType = builder.getIndexType();  // Placeholder type
-        auto space = builder.create<arith::ConstantIndexOp>(loc, dimension);
-
-        cache[key] = space;
-        return space;
-    }
-
-    void clear() { cache.clear(); }
+    void clear();
 };
 
-// Global cache instance
-static FunctionSpaceCache functionSpaceCache;
+// Method implementations (needed for linking from CAPI.cpp)
+int64_t FunctionSpaceCache::getOrCreateId(StringRef family, unsigned degree, int dimension) {
+    SpaceKey key{family.str(), degree, dimension};
+
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+        return it->second.uniqueId;  // Return cached ID
+    }
+
+    // Create new cache entry
+    CachedSpace space;
+    space.uniqueId = nextId++;
+    space.dimension = dimension;
+    space.family = family.str();
+    space.degree = degree;
+
+    cache[key] = space;
+    return space.uniqueId;
+}
+
+Value FunctionSpaceCache::createFromId(OpBuilder& builder, Location loc, int64_t id) {
+    // Find the cached space by ID
+    for (const auto& [key, space] : cache) {
+        if (space.uniqueId == id) {
+            // Create actual FEM operation here
+            // For now, create a constant with the dimension
+            return builder.create<arith::ConstantIndexOp>(loc, space.dimension);
+        }
+    }
+    return Value();  // Not found
+}
+
+void FunctionSpaceCache::clear() {
+    cache.clear();
+    nextId = 0;
+}
+
+// Global cache instance - exported for use in CAPI.cpp
+FunctionSpaceCache functionSpaceCache;
 
 //===----------------------------------------------------------------------===//
 // Helper functions
@@ -359,6 +395,13 @@ struct ConvertSCFToAffine : public OpRewritePattern<scf::ForOp> {
         if (!op.getInitArgs().empty()) {
             // This is more complex - would need affine.yield
             return failure();  // Skip loops with iter_args for now
+        }
+
+        // FIXED: Handle loop results properly
+        if (!op.getResults().empty()) {
+            // Affine loops don't have results like SCF loops
+            // We need to use a different approach (e.g., memref or global)
+            return failure();  // Skip loops with results for now
         }
 
         rewriter.eraseOp(op);

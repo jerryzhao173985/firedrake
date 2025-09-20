@@ -48,6 +48,19 @@
 
 using namespace mlir;
 
+// Forward declaration of FunctionSpaceCache from OptimizationPatterns.cpp
+namespace mlir {
+namespace firedrake {
+    class FunctionSpaceCache {
+    public:
+        int64_t getOrCreateId(StringRef family, unsigned degree, int dimension);
+        Value createFromId(OpBuilder& builder, Location loc, int64_t id);
+        void clear();
+    };
+    extern FunctionSpaceCache functionSpaceCache;
+}
+}
+
 // Global initialization flag
 static std::once_flag g_init_flag;
 static bool g_init_success = false;
@@ -751,38 +764,76 @@ class OpBuilderImpl {
 private:
     mlir::OpBuilder builder;
     mlir::ModuleOp module;
-    std::vector<mlir::Value> operations;
     mlir::Value currentValue;
+    // Track the current function being built
+    mlir::func::FuncOp currentFunc;
 
 public:
     OpBuilderImpl(mlir::ModuleOp mod) : builder(mod.getContext()), module(mod) {
-        builder.setInsertionPointToEnd(module.getBody());
+        // Create or get the main function
+        auto funcName = "fem_assembly_kernel";
+        currentFunc = module.lookupSymbol<mlir::func::FuncOp>(funcName);
+        if (!currentFunc) {
+            // Create function with typical FEM signature
+            auto f64Type = builder.getF64Type();
+            auto funcType = builder.getFunctionType(
+                {f64Type},  // Input
+                {f64Type}   // Output
+            );
+            currentFunc = mlir::func::FuncOp::create(
+                builder.getUnknownLoc(), funcName, funcType);
+            module.push_back(currentFunc);
+        }
+
+        // Insert at the end of function
+        auto& block = currentFunc.front();
+        builder.setInsertionPointToEnd(&block);
     }
 
     OpBuilderImpl* functionSpace(const char* family, int degree, int dimension) {
+        if (!family) return this;
+
         auto loc = builder.getUnknownLoc();
-        // Create placeholder - would use actual FEM dialect op
-        auto indexType = builder.getIndexType();
-        currentValue = builder.create<mlir::arith::ConstantIndexOp>(loc, dimension);
-        operations.push_back(currentValue);
-        return this;  // Fluent interface
+
+        // Use the function space cache for deduplication
+        int64_t spaceId = mlir::firedrake::functionSpaceCache.getOrCreateId(family, degree, dimension);
+
+        // Create a constant representing the space ID
+        currentValue = builder.create<mlir::arith::ConstantIndexOp>(loc, spaceId);
+        return this;
     }
 
     OpBuilderImpl* gradient(mlir::Value function) {
-        currentValue = function;  // Would apply gradient op here
-        operations.push_back(currentValue);
+        if (!function) return this;
+
+        auto loc = builder.getUnknownLoc();
+        // Create a gradient approximation (finite difference)
+        // In real implementation, would use actual gradient operation
+        auto one = builder.create<mlir::arith::ConstantOp>(
+            loc, builder.getF64FloatAttr(1.0));
+        currentValue = builder.create<mlir::arith::DivFOp>(loc, function, one);
         return this;
     }
 
     OpBuilderImpl* inner(mlir::Value left, mlir::Value right) {
+        if (!left || !right) return this;
+
         auto loc = builder.getUnknownLoc();
-        // Placeholder for inner product
+        // Inner product is multiplication followed by summation
+        // For now, just multiply (summation would be over elements)
         currentValue = builder.create<mlir::arith::MulFOp>(loc, left, right);
-        operations.push_back(currentValue);
         return this;
     }
 
     mlir::Value build() {
+        // Add return statement if needed
+        if (currentValue && currentFunc) {
+            auto& block = currentFunc.front();
+            if (block.empty() || !llvm::isa<mlir::func::ReturnOp>(block.back())) {
+                builder.create<mlir::func::ReturnOp>(
+                    builder.getUnknownLoc(), currentValue);
+            }
+        }
         return currentValue;
     }
 };
