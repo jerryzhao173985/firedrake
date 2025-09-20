@@ -134,6 +134,7 @@ add_library(firedrake_mlir SHARED
 add_library(fem_assembly SHARED
     src/FEMAssemblyKernel.cpp
     src/SparseCSROperations.cpp
+    src/BoundaryConditions.cpp
 )
 
 # Add dependencies on TableGen output

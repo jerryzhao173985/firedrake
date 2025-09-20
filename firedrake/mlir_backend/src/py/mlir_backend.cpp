@@ -15,6 +15,9 @@ extern "C" {
 int fd_init_once(void);
 void* fd_compiler_create(void);
 void fd_compiler_destroy(void* compiler);
+int fd_compiler_generate_fem_assembly(void* compiler, int num_elements,
+                                     int dofs_per_element, int quad_points,
+                                     void** kernel);
 int fd_compiler_verify(void* compiler);
 int fd_compiler_optimize(void* compiler, int level);
 int fd_compiler_lower_to_llvm(void* compiler);
@@ -73,6 +76,18 @@ public:
         return fd_compiler_optimize(compiler, 2) == 0;
     }
 
+    bool generateAssembly(int num_elements, int dofs_per_element, int quad_points) {
+        if (!compiler) return false;
+
+        if (verbose) {
+            py::print("Generating FEM assembly for", num_elements, "elements");
+        }
+
+        // CRITICAL: Generate the actual FEM assembly kernel
+        return fd_compiler_generate_fem_assembly(
+            compiler, num_elements, dofs_per_element, quad_points, &kernel) == 0;
+    }
+
     bool compile() {
         if (!compiler) return false;
 
@@ -123,6 +138,11 @@ PYBIND11_MODULE(firedrake_mlir_backend, m) {
              "Initialize MLIR backend")
         .def("get_ir", &MLIRBackend::getIR,
              "Get current MLIR IR representation")
+        .def("generate_assembly", &MLIRBackend::generateAssembly,
+             "Generate FEM assembly kernel",
+             py::arg("num_elements"),
+             py::arg("dofs_per_element"),
+             py::arg("quad_points"))
         .def("optimize", &MLIRBackend::optimize,
              "Run optimization pipeline")
         .def("compile", &MLIRBackend::compile,
